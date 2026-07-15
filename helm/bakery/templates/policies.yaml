@@ -1,0 +1,50 @@
+# Availability & scaling policies for the traffic edge. HPAs require
+# metrics-server in the cluster. Both target the *stable* track — the
+# canary track is intentionally held at a fixed small replica count
+# (canary.replicas) rather than autoscaled, so its resource footprint
+# stays predictable while it's under trial.
+{{- if .Values.autoscaling.enabled }}
+{{- $root := . }}
+{{- range .Values.autoscaling.targets }}
+{{- $name := . }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "bakery.namespace" $root }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}-stable
+  minReplicas: {{ $root.Values.autoscaling.minReplicas }}
+  maxReplicas: {{ $root.Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $root.Values.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $root := . }}
+{{- range .Values.podDisruptionBudget.targets }}
+{{- $name := . }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "bakery.namespace" $root }}
+spec:
+  minAvailable: {{ $root.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+      track: stable
+{{- end }}
+{{- end }}

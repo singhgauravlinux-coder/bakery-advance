@@ -1,0 +1,31 @@
+Crumb & Ember — {{ .Values.environment }} deployed to namespace {{ include "bakery.namespace" . }}
+
+Before this environment is usable, apply the two things this chart does
+NOT manage (by design — they're secrets, not templated config):
+
+  1. App login passwords (auth-service):
+     NAMESPACE={{ include "bakery.namespace" . }} ./scripts/generate-app-secrets.sh --apply
+
+  2. Real DB / payment credentials, if you didn't pass them via -f/--set:
+     helm upgrade --install bakery-{{ .Values.environment }} ./helm/bakery \
+       -f helm/bakery/values-{{ .Values.environment }}.yaml \
+       --set-string dbSecret.POSTGRES_PASSWORD=... \
+       -n {{ include "bakery.namespace" . }}
+
+Check rollout status:
+  kubectl -n {{ include "bakery.namespace" . }} get pods
+
+{{- if .Values.canary.enabled }}
+
+Canary is ON for this environment (api-gateway, frontend), currently at
+{{ .Values.canary.weight }}% of ingress traffic. Manage it with:
+  ./scripts/canary-promote.sh {{ .Values.environment }} status
+  ./scripts/canary-promote.sh {{ .Values.environment }} shift <0-100>
+  ./scripts/canary-promote.sh {{ .Values.environment }} promote
+  ./scripts/canary-promote.sh {{ .Values.environment }} rollback
+{{- end }}
+
+Ingress: http://{{ .Values.ingress.host }}
+{{- if .Values.adminer.enabled }}
+DB admin: http://{{ .Values.ingress.dbHost }}
+{{- end }}

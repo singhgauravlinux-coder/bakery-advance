@@ -1,0 +1,66 @@
+# Prod — full scale, autoscaling, PDBs, canary ON.
+# global.imageTag and canary.imageTag are normally passed by CI via
+# `--set global.imageTag=<released-sha> --set canary.imageTag=<candidate-sha>`
+# rather than edited here, so this file captures the steady-state shape.
+# Deploy: helm upgrade --install bakery-prod ./helm/bakery -f values-prod.yaml -n bakery-prod --create-namespace
+
+environment: prod
+
+global:
+  namespace: bakery-prod
+  imageTag: latest   # overridden by CI per release
+  logLevel: warn
+
+replicaCount:
+  default: 2
+edgeReplicaCount:
+  default: 3
+replicaOverrides:
+  order-service: 3
+  product-catalog-service: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 65
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+adminer:
+  enabled: false
+
+# Canary starts at 0% on every deploy of a new candidate; CI/on-call ramps
+# it via scripts/canary-promote.sh and only then promotes the candidate to
+# `global.imageTag` and scales the canary track back down to 0.
+canary:
+  enabled: true
+  weight: 0
+  replicas: 2
+  imageTag: ""   # set by CI to the release candidate SHA/tag
+
+postgres:
+  storage: 50Gi
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "4", memory: 4Gi }
+
+redis:
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+resources:
+  default:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  edge:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+ingress:
+  # Replace with the real production hostname.
+  host: www.crumbandember.example
+  dbHost: db.crumbandember.internal   # keep this off public DNS entirely

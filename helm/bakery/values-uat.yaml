@@ -1,0 +1,37 @@
+# UAT — mirrors prod shape at small scale so testers catch real issues.
+# No canary here: UAT is the last all-or-nothing gate before cug.
+# Deploy: helm upgrade --install bakery-uat ./helm/bakery -f values-uat.yaml -n bakery-uat --create-namespace
+
+environment: uat
+
+global:
+  namespace: bakery-uat
+  imageTag: uat
+  logLevel: info
+
+replicaCount:
+  default: 1
+edgeReplicaCount:
+  default: 1
+replicaOverrides:
+  order-service: 1
+  product-catalog-service: 1
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+adminer:
+  enabled: true
+
+canary:
+  enabled: false
+
+postgres:
+  storage: 3Gi
+
+ingress:
+  host: uat.bakery.local
+  dbHost: db.uat.bakery.local

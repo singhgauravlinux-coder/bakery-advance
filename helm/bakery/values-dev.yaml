@@ -1,0 +1,41 @@
+# Dev — one replica everywhere, no autoscaling/PDB, no canary, Adminer on.
+# Deploy: helm upgrade --install bakery-dev ./helm/bakery -f values-dev.yaml -n bakery-dev --create-namespace
+
+environment: dev
+
+global:
+  namespace: bakery-dev
+  imageTag: dev
+  logLevel: debug
+
+replicaCount:
+  default: 1
+edgeReplicaCount:
+  default: 1
+# Helm deep-merges maps key-by-key, so an empty {} here would NOT clear the
+# base chart's order-service/product-catalog-service:2 — override explicitly.
+replicaOverrides:
+  order-service: 1
+  product-catalog-service: 1
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+adminer:
+  enabled: true
+
+canary:
+  enabled: false
+
+postgres:
+  storage: 2Gi
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+ingress:
+  host: dev.bakery.local
+  dbHost: db.dev.bakery.local

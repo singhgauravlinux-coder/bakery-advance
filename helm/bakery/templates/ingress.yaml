@@ -1,0 +1,87 @@
+# Traefik ingress for the bakery stack. Prereq: Traefik installed as
+# ingress controller with the CRD provider enabled (default via Helm):
+#   helm repo add traefik https://traefik.github.io/charts
+#   helm install traefik traefik/traefik -n traefik --create-namespace
+#
+# IngressRoute (rather than a plain networking.k8s.io/v1 Ingress) is used
+# here specifically so each route can list multiple backend Services with
+# a `weight:` — that's what makes the canary traffic-split work natively,
+# with zero extra controllers (Flagger/Argo Rollouts) needed.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: body-limit
+  namespace: {{ include "bakery.namespace" . }}
+spec:
+  buffering:
+    maxRequestBodyBytes: 5242880   # 5 MiB
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: bakery-ingress
+  namespace: {{ include "bakery.namespace" . }}
+  labels:
+    {{- include "bakery.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: Host(`{{ .Values.ingress.host }}`) && PathPrefix(`/api`)
+      middlewares:
+        - name: body-limit
+      services:
+        - name: api-gateway-stable
+          port: 3000
+          {{- if .Values.canary.enabled }}
+          weight: {{ sub 100 .Values.canary.weight }}
+          {{- else }}
+          weight: 100
+          {{- end }}
+        {{- if .Values.canary.enabled }}
+        - name: api-gateway-canary
+          port: 3000
+          weight: {{ .Values.canary.weight }}
+        {{- end }}
+    - kind: Rule
+      match: Host(`{{ .Values.ingress.host }}`) && PathPrefix(`/`)
+      services:
+        - name: frontend-stable
+          port: 8080
+          {{- if .Values.canary.enabled }}
+          weight: {{ sub 100 .Values.canary.weight }}
+          {{- else }}
+          weight: 100
+          {{- end }}
+        {{- if .Values.canary.enabled }}
+        - name: frontend-canary
+          port: 8080
+          weight: {{ .Values.canary.weight }}
+        {{- end }}
+{{- if .Values.adminer.enabled }}
+---
+# DB frontend (Adminer). Keep this host off public DNS, protect it with a
+# Traefik basicAuth middleware, or delete this block and use
+# `kubectl port-forward svc/adminer 8081:8080` instead.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bakery-db-ingress
+  namespace: {{ include "bakery.namespace" . }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.dbHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: adminer
+                port:
+                  number: 8080
+{{- end }}

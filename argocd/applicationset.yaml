@@ -1,0 +1,60 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: bakery
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - list:
+        elements:
+          - env: dev
+            autoSync: "true"
+          - env: uat
+            autoSync: "true"
+          # cug and prod are the canary-gated stages. Auto-sync is
+          # deliberately OFF here: a Git change to values-cug.yaml /
+          # values-prod.yaml (or a `helm upgrade` from
+          # scripts/canary-promote.sh) shows up as "OutOfSync" in the
+          # ArgoCD UI, and a human (or the promoter role) syncs it
+          # explicitly with `argocd app sync bakery-<env>`.
+          - env: cug
+            autoSync: "false"
+          - env: prod
+            autoSync: "false"
+
+  template:
+    metadata:
+      name: "bakery-{{.env}}"
+      labels:
+        env: "{{.env}}"
+        app.kubernetes.io/part-of: crumb-and-ember
+    spec:
+      project: bakery
+      source:
+        repoURL: https://github.com/YOUR_GITHUB_USERNAME/bakery-3d-fullstack.git
+        targetRevision: main
+        path: helm/bakery
+        helm:
+          valueFiles:
+            - "values-{{.env}}.yaml"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "bakery-{{.env}}"
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 15s
+            factor: 2
+            maxDuration: 3m
+        {{- if eq .autoSync "true" }}
+        automated:
+          prune: true
+          selfHeal: true
+        {{- end }}

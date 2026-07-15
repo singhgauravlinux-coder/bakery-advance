@@ -1,0 +1,64 @@
+{{- $root := . -}}
+{{- range .Values.edgeServices }}
+{{- $svc := . -}}
+{{- $stableReplicas := include "bakery.edgeReplicas" (dict "svc" $svc "root" $root) | trim -}}
+---
+{{ include "bakery.edgeDeployment" (dict "svc" $svc "root" $root "track" "stable" "replicas" $stableReplicas "imageTag" $root.Values.global.imageTag) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.name }}-stable
+  namespace: {{ include "bakery.namespace" $root }}
+  labels:
+    app: {{ $svc.name }}
+    track: stable
+spec:
+  selector:
+    app: {{ $svc.name }}
+    track: stable
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: {{ $svc.port }}
+      protocol: TCP
+{{- if $root.Values.canary.enabled }}
+{{- $canaryTag := $root.Values.canary.imageTag | default $root.Values.global.imageTag }}
+---
+{{ include "bakery.edgeDeployment" (dict "svc" $svc "root" $root "track" "canary" "replicas" $root.Values.canary.replicas "imageTag" $canaryTag) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.name }}-canary
+  namespace: {{ include "bakery.namespace" $root }}
+  labels:
+    app: {{ $svc.name }}
+    track: canary
+spec:
+  selector:
+    app: {{ $svc.name }}
+    track: canary
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: {{ $svc.port }}
+      protocol: TCP
+{{- end }}
+---
+# Untracked Service spanning both tracks — for in-cluster callers and
+# `kubectl port-forward`. The Ingress (templates/ingress.yaml) talks to
+# -stable/-canary directly so it can weight traffic between them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ include "bakery.namespace" $root }}
+  labels:
+    app: {{ $svc.name }}
+spec:
+  selector:
+    app: {{ $svc.name }}
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: {{ $svc.port }}
+      protocol: TCP
+{{- end }}

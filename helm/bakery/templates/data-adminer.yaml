@@ -1,0 +1,71 @@
+{{- if .Values.adminer.enabled }}
+# Adminer — lightweight web UI for the database (the "DB frontend").
+# Disabled in cug/prod by default (see adminer.enabled in values-*.yaml).
+# Reachable at http://<ingress.dbHost> or via:
+#   kubectl -n {{ include "bakery.namespace" . }} port-forward svc/adminer 8081:8080
+# Login: System=PostgreSQL, Server=postgres, User={{ .Values.dbSecret.POSTGRES_USER }}, DB={{ .Values.dbSecret.POSTGRES_DB }}.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adminer
+  namespace: {{ include "bakery.namespace" . }}
+  labels:
+    app: adminer
+    {{- include "bakery.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adminer
+  template:
+    metadata:
+      labels:
+        app: adminer
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: adminer
+          image: adminer:4
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ADMINER_DEFAULT_SERVER
+              value: postgres
+            - name: ADMINER_DESIGN
+              value: dracula
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adminer
+  namespace: {{ include "bakery.namespace" . }}
+  labels:
+    app: adminer
+spec:
+  selector:
+    app: adminer
+  ports:
+    - port: 8080
+      targetPort: 8080
+{{- end }}

@@ -1,0 +1,234 @@
+# Default values for the bakery chart. Do not edit environment behaviour
+# here — override it in values-dev.yaml / values-uat.yaml / values-cug.yaml
+# / values-prod.yaml. This file defines WHAT the platform is made of
+# (the service catalog); the per-env files define HOW BIG and HOW SAFE
+# each deployment of it is.
+
+environment: dev
+
+global:
+  namespace: bakery-dev
+  imageRegistry: ghcr.io/YOUR_GITHUB_USERNAME/bakery-microservices
+  imageTag: latest
+  imagePullPolicy: Always
+  logLevel: info
+
+# Replica counts. Kept as scalars/maps (not fields inside the service
+# lists below) so every value here safely *deep-merges* across
+# values-<env>.yaml files — Helm replaces lists wholesale but merges maps,
+# so per-service replica tuning goes through `replicaOverrides`, a map of
+# serviceName -> replicas, never by re-declaring `services:`/`edgeServices:`.
+replicaCount:
+  default: 1          # internal domain services
+replicaOverrides:      # e.g. { order-service: 3 } — deep-merges per environment
+  order-service: 2
+  product-catalog-service: 2
+
+edgeReplicaCount:
+  default: 2           # api-gateway + frontend
+edgeReplicaOverrides: {}
+
+# Applied to every internal service container unless overridden per-service
+# via resourceOverrides (a map, safe to deep-merge across env files).
+resources:
+  default:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+  edge:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+resourceOverrides: {}
+
+# HPA — off by default (dev/uat), turned on in cug/prod.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  # Services that get their own HPA when autoscaling is enabled.
+  targets:
+    - api-gateway
+    - frontend
+
+# PodDisruptionBudget — off by default (dev/uat), turned on in cug/prod.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  targets:
+    - api-gateway
+    - frontend
+
+# Adminer (DB admin UI) — convenient in dev/uat, disabled in cug/prod.
+adminer:
+  enabled: true
+
+# Postgres / Redis sizing — overridden per environment.
+postgres:
+  storage: 5Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+redis:
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+
+# Credentials — ALWAYS override via -f a secrets values file or
+# --set-string in CI. These defaults are for local dev only.
+dbSecret:
+  POSTGRES_USER: bakery
+  POSTGRES_PASSWORD: change-me-in-prod
+  POSTGRES_DB: bakery
+  AUTH_TOKEN_SECRET: change-me-too-a-long-random-string
+
+razorpay:
+  keyId: ""
+  keySecret: ""
+  webhookSecret: ""
+
+ingress:
+  className: traefik
+  host: bakery.local
+  dbHost: db.bakery.local
+
+# --- Canary (edge services only: api-gateway, frontend) -------------------
+# Disabled in dev/uat. In cug/prod, a second "canary" track of the
+# Deployment is rendered alongside "stable" and Traefik splits traffic
+# between them by weight. Promote/rollback with scripts/canary-promote.sh.
+canary:
+  enabled: false
+  weight: 0        # % of ingress traffic sent to the canary track (0-100)
+  replicas: 1
+  imageTag: ""      # defaults to global.imageTag when empty; set to test a specific tag
+
+# --- Edge services (fronted by the Ingress, canary-eligible) --------------
+edgeServices:
+  - name: api-gateway
+    port: 3000
+    runAsUser: 1000
+    healthPath: { ready: /ready, live: /health }
+    env: []
+  - name: frontend
+    port: 8080
+    runAsUser: 101
+    healthPath: { ready: /healthz, live: /healthz }
+    env: []
+    volumes:
+      - name: tmp
+        emptyDir: {}
+    volumeMounts:
+      - name: tmp
+        mountPath: /tmp
+
+# --- Internal domain services (no external ingress, no canary) -----------
+services:
+  - name: auth-service
+    port: 3001
+    env:
+      - { name: DATABASE_URL, secretRef: { name: bakery-db-secret, key: DATABASE_URL } }
+      - { name: AUTH_TOKEN_SECRET, secretRef: { name: bakery-db-secret, key: AUTH_TOKEN_SECRET } }
+    volumes:
+      - name: app-passwords
+        secret:
+          secretName: app-passwords
+          items: [{ key: passwords.txt, path: passwords.txt }]
+    volumeMounts:
+      - name: app-passwords
+        mountPath: /run/secrets/app-passwords
+        readOnly: true
+
+  - name: user-service
+    port: 3002
+    env:
+      - { name: DATABASE_URL, secretRef: { name: bakery-db-secret, key: DATABASE_URL } }
+
+  - name: product-catalog-service
+    port: 3003
+    env:
+      - { name: DATABASE_URL, secretRef: { name: bakery-db-secret, key: DATABASE_URL } }
+
+  - name: inventory-service
+    port: 3004
+    env: []
+
+  - name: pricing-service
+    port: 3005
+    env: []
+
+  - name: cart-service
+    port: 3006
+    env:
+      - { name: REDIS_URL, value: "redis://redis:6379" }
+
+  - name: order-service
+    port: 3007
+    env:
+      - { name: DATABASE_URL, secretRef: { name: bakery-db-secret, key: DATABASE_URL } }
+
+  - name: payment-service
+    port: 3008
+    env:
+      - { name: DATABASE_URL, secretRef: { name: bakery-db-secret, key: DATABASE_URL } }
+      - { name: RAZORPAY_KEY_ID, secretRef: { name: razorpay-credentials, key: keyId, optional: true } }
+      - { name: RAZORPAY_KEY_SECRET, secretRef: { name: razorpay-credentials, key: keySecret, optional: true } }
+      - { name: RAZORPAY_WEBHOOK_SECRET, secretRef: { name: razorpay-credentials, key: webhookSecret, optional: true } }
+
+  - name: delivery-service
+    port: 3009
+    env: []
+
+  - name: notification-service
+    port: 3010
+    env: []
+
+  - name: review-service
+    port: 3011
+    env: []
+
+  - name: search-service
+    port: 3012
+    env: []
+
+  - name: recommendation-service
+    port: 3013
+    env: []
+
+  - name: promotion-service
+    port: 3014
+    env: []
+
+  - name: loyalty-service
+    port: 3015
+    env: []
+
+  - name: recipe-service
+    port: 3016
+    env: []
+
+  - name: baking-schedule-service
+    port: 3017
+    env: []
+
+  - name: supplier-service
+    port: 3018
+    env: []
+
+  - name: analytics-service
+    port: 3019
+    env: []
+
+  - name: media-service
+    port: 3020
+    env: []
+
+  - name: invoice-service
+    port: 3021
+    env: []
+
+  - name: currency-service
+    port: 3022
+    env: []
+
+  - name: language-service
+    port: 3023
+    env: []

@@ -1,0 +1,79 @@
+{{- $root := . -}}
+{{- range .Values.services }}
+{{- $svc := . }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ include "bakery.namespace" $root }}
+  labels:
+    app: {{ $svc.name }}
+    {{- include "bakery.labels" $root | nindent 4 }}
+spec:
+  replicas: {{ include "bakery.replicas" (dict "svc" $svc "root" $root) }}
+  selector:
+    matchLabels:
+      app: {{ $svc.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $svc.name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ $svc.name }}
+          image: {{ include "bakery.image" (dict "svc" $svc "root" $root) }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $svc.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            {{- include "bakery.env" (dict "svc" $svc "root" $root) | nindent 12 }}
+          {{- if $svc.volumeMounts }}
+          volumeMounts:
+            {{- toYaml $svc.volumeMounts | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: {{ $svc.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ $svc.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- include "bakery.resources" (dict "svc" $svc "root" $root) | nindent 12 }}
+      {{- if $svc.volumes }}
+      volumes:
+        {{- toYaml $svc.volumes | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ include "bakery.namespace" $root }}
+  labels:
+    app: {{ $svc.name }}
+spec:
+  selector:
+    app: {{ $svc.name }}
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: {{ $svc.port }}
+      protocol: TCP
+{{- end }}

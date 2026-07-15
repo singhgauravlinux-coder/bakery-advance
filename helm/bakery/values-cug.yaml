@@ -1,0 +1,52 @@
+# CUG (Closed User Group) — pre-prod, real infra, limited real users.
+# Canary is ON here: this is the first stage where a new release is
+# exposed to live traffic gradually before it's trusted with prod.
+# Deploy: helm upgrade --install bakery-cug ./helm/bakery -f values-cug.yaml -n bakery-cug --create-namespace
+
+environment: cug
+
+global:
+  namespace: bakery-cug
+  imageTag: cug
+  logLevel: info
+
+replicaCount:
+  default: 1
+edgeReplicaCount:
+  default: 2
+replicaOverrides:
+  order-service: 2
+  product-catalog-service: 2
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# No DB admin UI once real (even if limited) user data is involved.
+adminer:
+  enabled: false
+
+# Canary starts at 0% — scripts/canary-promote.sh ramps it up once the
+# candidate build (canary.imageTag) is deployed, and rolls back to 0 on
+# any readiness failure.
+canary:
+  enabled: true
+  weight: 0
+  replicas: 1
+  imageTag: ""   # set by CI to the candidate SHA/tag being trialled
+
+postgres:
+  storage: 10Gi
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi }
+
+ingress:
+  host: cug.bakery.local
+  dbHost: db.cug.bakery.local

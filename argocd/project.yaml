@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: bakery
+  namespace: argocd
+spec:
+  description: Crumb & Ember bakery platform — dev, uat, cug, prod
+
+  sourceRepos:
+    - https://github.com/YOUR_GITHUB_USERNAME/bakery-3d-fullstack.git
+
+  destinations:
+    - namespace: "bakery-*"
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+
+  # Resources the bakery apps are allowed to manage. Namespace-scoped is
+  # wide open (the chart owns Deployments, Services, HPAs, PDBs, Secrets,
+  # ConfigMaps, IngressRoutes/Middlewares); cluster-scoped is limited to
+  # just creating the bakery-<env> Namespace itself.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  # cug/prod are deliberately NOT auto-synced (see applicationset.yaml).
+  # This role lets a "release manager" group sync just those two without
+  # giving them blanket ArgoCD admin — wire it up under Settings → RBAC
+  # once you have real SSO groups; until then, syncing still works fine
+  # via `argocd app sync` for anyone with project access.
+  roles:
+    - name: promoter
+      description: Can sync/rollback the human-gated stages (cug, prod)
+      policies:
+        - p, proj:bakery:promoter, applications, sync, bakery/bakery-cug, allow
+        - p, proj:bakery:promoter, applications, sync, bakery/bakery-prod, allow
+        - p, proj:bakery:promoter, applications, get, bakery/*, allow
+      groups:
+        - bakery-release-managers

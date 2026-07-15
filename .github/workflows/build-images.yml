@@ -1,0 +1,136 @@
+name: Build and update manifests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "k8s/**"        # manifest-only commits (incl. the auto-update commit) don't rebuild images
+      - "helm/**"        # same, for the Helm values-dev.yaml auto-bump and canary-promote.sh commits
+      - "README.md"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ------------------------------------------------------------ build images
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - auth-service
+          - user-service
+          - product-catalog-service
+          - inventory-service
+          - pricing-service
+          - cart-service
+          - order-service
+          - payment-service
+          - delivery-service
+          - notification-service
+          - review-service
+          - search-service
+          - recommendation-service
+          - promotion-service
+          - loyalty-service
+          - recipe-service
+          - baking-schedule-service
+          - supplier-service
+          - analytics-service
+          - media-service
+          - invoice-service
+          - currency-service
+          - language-service
+          - api-gateway
+          - frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ---------------------------------------- auto-update image names in k8s/
+  # After all images are pushed, rewrite the image: line in every service
+  # manifest to ghcr.io/<owner>/<repo>/<service>:<short-sha> and commit the
+  # change back. The manifests in git therefore always reference the exact
+  # image built from that commit — no manual editing of YOUR_GITHUB_USERNAME.
+  update-manifests:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update image references in k8s manifests
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY,,}"          # ghcr requires lowercase
+          TAG="${GITHUB_SHA::7}"                 # matches metadata-action's short sha
+          for manifest in k8s/services/*.yaml; do
+            svc="$(basename "$manifest" .yaml)"
+            sed -i -E "s|image: .*/${svc}:.*|image: ghcr.io/${REPO}/${svc}:${TAG}|" "$manifest"
+            echo "updated ${svc} -> ghcr.io/${REPO}/${svc}:${TAG}"
+          done
+
+      - name: Bump dev's Helm image tag (ArgoCD auto-syncs bakery-dev on every push to main)
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::7}"
+          # values-dev.yaml has exactly one imageTag key (canary is disabled
+          # in dev, so there's no canary.imageTag to collide with).
+          grep -q '^  imageTag:' helm/bakery/values-dev.yaml || { echo "imageTag key not found in values-dev.yaml" >&2; exit 1; }
+          sed -i -E "s|^(\s*imageTag:\s*).*|\1${TAG}|" helm/bakery/values-dev.yaml
+          echo "dev imageTag -> ${TAG}"
+
+      - name: Commit updated manifests
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- k8s/services helm/bakery/values-dev.yaml; then
+            echo "Manifests already up to date — nothing to commit."
+            exit 0
+          fi
+          git add k8s/services helm/bakery/values-dev.yaml
+          git commit -m "ci: bump service images to ${GITHUB_SHA::7} [skip ci]"
+          git push origin main
