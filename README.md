@@ -136,6 +136,7 @@ Each service listens on its own port (`PORT` env → compose host port → k8s S
 | 3008 | payment-service | 3019 | analytics-service |
 | 3009 | delivery-service | 3020 | media-service |
 | 3010 | notification-service | 3021 | invoice-service |
+| 3022 | currency-service | 3023 | language-service |
 
 *(Frontend 8080 · Adminer 8081 · Postgres 5432 · Redis internal.)* In compose you can
 bypass the gateway and hit any service directly:
