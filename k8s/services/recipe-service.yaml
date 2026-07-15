@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: recipe-service
-          image: ghcr.io/YOUR_GITHUB_USERNAME/bakery-microservices/recipe-service:latest
+          image: ghcr.io/singhgauravlinux-coder/bakery-advance/recipe-service:c0955ca
           imagePullPolicy: Always
           ports:
             - containerPort: 3016

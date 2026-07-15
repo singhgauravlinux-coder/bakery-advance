@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: pricing-service
-          image: ghcr.io/YOUR_GITHUB_USERNAME/bakery-microservices/pricing-service:latest
+          image: ghcr.io/singhgauravlinux-coder/bakery-advance/pricing-service:c0955ca
           imagePullPolicy: Always
           ports:
             - containerPort: 3005
