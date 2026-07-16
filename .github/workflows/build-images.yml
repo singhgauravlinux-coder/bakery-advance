@@ -88,6 +88,10 @@ jobs:
   # Runs in parallel with the docker build matrix. This repo has no pom.xml —
   # every service under services/* is Node.js (package.json + server.js) — so
   # we use the generic SonarQube scanner instead of the Maven plugin.
+  #
+  # NOTE: the Quality Gate check step below is what makes this job actually
+  # FAIL when the gate is red. Without it, sonarqube-scan-action only uploads
+  # results and always exits 0, regardless of how bad the ratings are.
   sonar-analysis:
     name: Build and analyze (SonarQube)
     runs-on: ubuntu-latest
@@ -95,17 +99,29 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      - uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube Quality Gate check
+        uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   # ---------------------------------------- auto-update image names in k8s/
   # After all images are pushed, rewrite the image: line in every service
   # manifest to ghcr.io/<owner>/<repo>/<service>:<short-sha> and commit the
   # change back. The manifests in git therefore always reference the exact
   # image built from that commit — no manual editing of YOUR_GITHUB_USERNAME.
+  #
+  # Gated on sonar-analysis too: manifests (and therefore the ArgoCD dev sync)
+  # only update if the quality gate actually passed.
   update-manifests:
-    needs: build
+    needs: [build, sonar-analysis]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
