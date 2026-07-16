@@ -95,19 +95,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@v6
+      - uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        with:
-          args: >
-            -Dsonar.projectKey=singhgauravlinux-coder_bakery-swagger_1c30f684-9261-4e30-a071-9d5a75ed8f8b
-            -Dsonar.projectName=bakery-swagger
-            -Dsonar.sources=services
-            -Dsonar.exclusions=**/node_modules/**
-
   # ---------------------------------------- auto-update image names in k8s/
   # After all images are pushed, rewrite the image: line in every service
   # manifest to ghcr.io/<owner>/<repo>/<service>:<short-sha> and commit the
