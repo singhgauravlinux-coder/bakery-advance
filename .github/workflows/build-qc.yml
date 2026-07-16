@@ -1,0 +1,228 @@
+name: Build, Analyze, and Update Manifests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "k8s/**"        # manifest-only commits (incl. the auto-update commit) don't rebuild images
+      - "helm/**"       # same, for the Helm values-dev.yaml auto-bump commits
+      - "README.md"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ------------------------------------------------------------ build images
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - auth-service
+          - user-service
+          - product-catalog-service
+          - inventory-service
+          - pricing-service
+          - cart-service
+          - order-service
+          - payment-service
+          - delivery-service
+          - notification-service
+          - review-service
+          - search-service
+          - recommendation-service
+          - promotion-service
+          - loyalty-service
+          - recipe-service
+          - baking-schedule-service
+          - supplier-service
+          - analytics-service
+          - media-service
+          - invoice-service
+          - currency-service
+          - language-service
+          - api-gateway
+          - frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ------------------------------------------------------------ sonarqube analysis
+  # Runs in parallel with the docker build matrix. This repo has no pom.xml —
+  # every service under services/* is Node.js (package.json + server.js) — so
+  # we use the generic SonarQube scanner instead of the Maven plugin.
+  #
+  # NOTE: the Quality Gate check step below is what makes this job actually
+  # FAIL when the gate is red. Without it, sonarqube-scan-action only uploads
+  # results and always exits 0, regardless of how bad the ratings are.
+  sonar-analysis:
+    name: Build and analyze (SonarQube)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube Quality Gate check
+        uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ------------------------------------------------------------ AI auto-fix on failed gate
+  # Only runs if sonar-analysis failed (i.e. the quality gate went red — new
+  # vulnerability/bug, or existing Security/Reliability rating below the bar).
+  # Claude Code reads the open Sonar issues, patches the affected files, and
+  # opens a PR. It never commits or pushes to main directly — a human still
+  # reviews and merges, and should re-run the Sonar scan on the PR to confirm
+  # the gate actually goes green before approving.
+  auto-fix-issues:
+    needs: sonar-analysis
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ask Claude Code to remediate open Sonar issues
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          allowed_tools: "Read,Edit,Grep,Glob,Bash(curl:*)"
+          prompt: |
+            The SonarQube quality gate failed on commit ${{ github.sha }} for
+            project singhgauravlinux-coder_bakery-swagger_1c30f684-9261-4e30-a071-9d5a75ed8f8b
+            (server: ${SONAR_HOST_URL}).
+
+            1. Call the SonarQube API to list open issues, ordered by severity:
+               GET ${SONAR_HOST_URL}/api/issues/search?componentKeys=singhgauravlinux-coder_bakery-swagger_1c30f684-9261-4e30-a071-9d5a75ed8f8b&types=VULNERABILITY,BUG&statuses=OPEN&s=SEVERITY&asc=false
+               using SONAR_TOKEN as the bearer token.
+            2. Work through issues starting with BLOCKER, then CRITICAL, then
+               MAJOR. For each, open the referenced file and rule description,
+               and apply the minimal fix that resolves it without changing
+               existing behavior or unrelated code.
+            3. If an issue looks like a false positive rather than a real bug
+               (e.g. a Sonar rule flagging intentional, safe code), skip it and
+               note why in your summary rather than guessing at a fix.
+            4. Do not touch files that have no flagged issue.
+            5. Leave the working tree with the fixes applied — do not commit
+               or push; the next step handles that. End with a short summary
+               of which issues were fixed, which were skipped, and why.
+
+      - name: Open a PR with the fixes
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "fix(security): auto-remediate open SonarQube issues"
+          branch: sonar-autofix/${{ github.run_id }}
+          title: "🤖 Auto-fix: SonarQube issue remediation"
+          body: |
+            Automated fix generated by Claude Code after the SonarQube quality
+            gate failed on commit ${{ github.sha }}.
+
+            **This was not written or reviewed by a human — review carefully
+            before merging.** Re-run the Sonar analysis on this PR and confirm
+            the gate passes before approving.
+          labels: automated-fix, security
+
+  # ---------------------------------------- auto-update image names in k8s/
+  # After all images are pushed, rewrite the image: line in every service
+  # manifest to ghcr.io/<owner>/<repo>/<service>:<short-sha> and commit the
+  # change back. The manifests in git therefore always reference the exact
+  # image built from that commit — no manual editing of YOUR_GITHUB_USERNAME.
+  #
+  # Gated on sonar-analysis too: manifests (and therefore the ArgoCD dev sync)
+  # only update if the quality gate actually passed.
+  update-manifests:
+    needs: [build, sonar-analysis]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update image references in k8s manifests
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY,,}"          # ghcr requires lowercase
+          TAG="${GITHUB_SHA::7}"                 # matches metadata-action's short sha
+          for manifest in k8s/services/*.yaml; do
+            svc="$(basename "$manifest" .yaml)"
+            sed -i -E "s|image: .*/${svc}:.*|image: ghcr.io/${REPO}/${svc}:${TAG}|" "$manifest"
+            echo "updated ${svc} -> ghcr.io/${REPO}/${svc}:${TAG}"
+          done
+
+      - name: Bump dev's Helm image tag (ArgoCD auto-syncs bakery-dev on every push to main)
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::7}"
+          # values-dev.yaml has exactly one imageTag key (canary is disabled
+          # in dev, so there's no canary.imageTag to collide with).
+          grep -q '^  imageTag:' helm/bakery/values-dev.yaml || { echo "imageTag key not found in values-dev.yaml" >&2; exit 1; }
+          sed -i -E "s|^(\s*imageTag:\s*).*|\1${TAG}|" helm/bakery/values-dev.yaml
+          echo "dev imageTag -> ${TAG}"
+
+      - name: Commit updated manifests
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- k8s/services helm/bakery/values-dev.yaml; then
+            echo "Manifests already up to date — nothing to commit."
+            exit 0
+          fi
+          git add k8s/services helm/bakery/values-dev.yaml
+          git commit -m "ci: bump service images to ${GITHUB_SHA::7} [skip ci]"
+          git push origin main
