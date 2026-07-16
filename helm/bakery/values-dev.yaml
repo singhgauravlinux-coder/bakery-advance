@@ -5,7 +5,7 @@ environment: dev
 
 global:
   namespace: bakery-dev
-  imageTag: 81fb76c
+  imageTag: f204e6e
   logLevel: debug
 
 replicaCount:

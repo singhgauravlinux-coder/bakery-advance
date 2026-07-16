@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: delivery-service
-          image: ghcr.io/singhgauravlinux-coder/bakery-advance/delivery-service:81fb76c
+          image: ghcr.io/singhgauravlinux-coder/bakery-advance/delivery-service:f204e6e
           imagePullPolicy: Always
           ports:
             - containerPort: 3009
