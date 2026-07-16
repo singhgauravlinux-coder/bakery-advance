@@ -1,11 +1,11 @@
-name: Build and update manifests
+name: Build, Analyze, and Update Manifests
 
 on:
   push:
     branches: [main]
     paths-ignore:
       - "k8s/**"        # manifest-only commits (incl. the auto-update commit) don't rebuild images
-      - "helm/**"        # same, for the Helm values-dev.yaml auto-bump and canary-promote.sh commits
+      - "helm/**"       # same, for the Helm values-dev.yaml auto-bump commits
       - "README.md"
   pull_request:
     branches: [main]
@@ -83,6 +83,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ------------------------------------------------------------ sonarqube analysis
+  # Runs in parallel with the docker build matrix. This repo has no pom.xml —
+  # every service under services/* is Node.js (package.json + server.js) — so
+  # we use the generic SonarQube scanner instead of the Maven plugin.
+  sonar-analysis:
+    name: Build and analyze (SonarQube)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=singhgauravlinux-coder_bakery-swagger_1c30f684-9261-4e30-a071-9d5a75ed8f8b
+            -Dsonar.projectName=bakery-swagger
+            -Dsonar.sources=services
+            -Dsonar.exclusions=**/node_modules/**
 
   # ---------------------------------------- auto-update image names in k8s/
   # After all images are pushed, rewrite the image: line in every service
